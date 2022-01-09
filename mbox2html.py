@@ -245,26 +245,26 @@ if __name__ == '__main__':
             children[parent] = []
         children[parent].append( msg_id )
 
-    ## Writes email html files
-    #for key, msg in messages.items():
-    #    msg_id = msg.get( 'message-id' )
-    #    body_path = os.path.join( outdir, msg_id + '.html' )
-    #    attachment_path = os.path.join( outdir, msg_id )
+    # Writes email html files
+    for key, msg in messages.items():
+        msg_id = msg.get( 'message-id' )
+        body_path = os.path.join( outdir, msg_id + '.html' )
+        attachment_path = os.path.join( outdir, msg_id )
 
-    #    # Deletes all previous files (if they exist) for easier append-age later
-    #    try:
-    #        os.remove( body_path )
-    #    except OSError:
-    #        pass
-    #    shutil.rmtree( attachment_path, ignore_errors=True )
+        # Deletes all previous files (if they exist) for easier append-age later
+        try:
+            os.remove( body_path )
+        except OSError:
+            pass
+        shutil.rmtree( attachment_path, ignore_errors=True )
 
-    #    content = parse_email( msg )
-    #    content_to_html( msg, content, children, message_ids, outdir )
+        content = parse_email( msg )
+        content_to_html( msg, content, children, message_ids, outdir )
 
     # Writes index.html
     # 1. Sort files based on timestamp
-    messages = [x for x in messages]
-    messages.sort( key = lambda m: email.utils.parsedate_tz( m.get( 'date' ) ) )
+    sorted_messages = [x for x in messages]
+    sorted_messages.sort( key = lambda m: email.utils.parsedate_tz( m.get( 'date' ) ) )
     # 2. Find messages that either have no parent or parent html file
     roots = [
         f.get( 'message-id' ) for f in sorted_messages if not get_parent_id( f ) \
