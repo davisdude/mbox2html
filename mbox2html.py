@@ -2,6 +2,8 @@ import mailbox
 import email, email.policy, email.utils
 import html
 import chardet
+import base64
+import struct
 import copy
 import re
 import os
@@ -83,6 +85,27 @@ def parse_email( msg ):
             'type': content_type,
         }]
 
+def get_parent_id( msg ):
+    references = msg.get( 'references' )
+    if ( references is None ):
+        # Try in-reply-to
+        irt = msg.get( 'in-reply-to' )
+        if ( irt is not None ): return irt
+        # TODO: Try thread-index
+        # https://docs.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxomsg/9e994fbb-b839-495f-84e3-2c8c02c7dd9b
+        #thread_index = msg.get( 'thread-index' )
+        #if ( thread_index is None ): return None
+        ## Extracts thread index data
+        #thread_index = baes64.b64decode( thread_index )
+        #filetime = struct.unpack( '>xIB', thread_index[:6] )
+        #guid = struct.unpack( '>IHHQ', thread_index[6:22] )
+        #response_levels = []
+        #for r in range( 22, len( thread_index ), 5 ):
+        #    response_levels.append( struct.unpack( '>I', thread_index[r:r + 4] )[0] )
+        # Decodes thread index data
+    # Assumes last references is the replied-to email
+    return re.split( r'\s+', references )[-1]
+
 def content_to_html( msg, content, children, message_ids, outdir ):
     if ( content is None ): return
 
@@ -110,12 +133,12 @@ def content_to_html( msg, content, children, message_ids, outdir ):
         ) )
 
         # Parent info
-        irt = msg.get( 'in-reply-to' )
-        if ( irt is not None ):
-            if ( irt in message_ids ):
+        parent = get_parent_id( msg )
+        if ( parent is not None ):
+            if ( parent in message_ids ):
                 file.write( '''
                         <p><a href="%s">Parent</a></p>
-                ''' % ( irt + '.html' ) )
+                ''' % ( parent + '.html' ) )
             else:
                 file.write( '''
                         <p><em>Parent not archived</em></p>
@@ -217,7 +240,7 @@ if __name__ == '__main__':
         message_ids[msg_id] = msg
         if ( msg_id not in children ):
             children[msg_id] = []
-        parent = msg.get( 'in-reply-to' )
+        parent = get_parent_id( msg )
         if ( parent not in children ):
             children[parent] = []
         children[parent].append( msg_id )
@@ -244,9 +267,9 @@ if __name__ == '__main__':
     messages.sort( key = lambda m: email.utils.parsedate_tz( m.get( 'date' ) ) )
     # 2. Find messages that either have no parent or parent html file
     roots = [
-        f.get( 'message-id' ) for f in messages if not f.get( 'in-reply-to' ) \
+        f.get( 'message-id' ) for f in sorted_messages if not get_parent_id( f ) \
             or not os.path.exists( os.path.join(
-                outdir, f.get( 'in-reply-to' ) + '.html'
+                outdir, get_parent_id( f ) + '.html'
             ) )
     ]
     with open( os.path.join( outdir, 'index.html' ), 'w' ) as file:
