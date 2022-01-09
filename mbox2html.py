@@ -1,190 +1,267 @@
-# TODO: Header file/templates
-#       Checking of input/output files/directories
-#       Email attachments
-
 import mailbox
+import email, email.policy, email.utils
 import html
-import dateutil.parser as date_parser
-import argparse
-import os
+import chardet
+import copy
 import re
+import os
+import shutil
 
-title = 'LUG @ NC State Email Archives'
+def flatten( l ):
+    for i in l:
+        if isinstance( i, list ):
+            yield from flatten( i )
+        else:
+            yield i
 
-# Removes TLD from emails for privacy
-pattern = re.compile(r'([\w\.\+_-]+@[\w\._-]+\.)([a-zA-Z]+)')
-def filter_emails(text):
-    return pattern.sub(
-        r'\1&lt;hidden&gt;',
-        text
-    )
+# Puts date into consistent format
+def format_date( msg ):
+    date = msg.get( 'date' )
+    return email.utils.format_datetime( email.utils.parsedate_to_datetime( date ) )
 
-def get_content(message, type):
-    for part in message.walk():
-        if part.get_content_type() == type:
-            content = part.get_payload(decode=True)
-            charset = part.get_content_charset()
-            print(charset)
-            return content.decode(charset or 'utf-8')
-    return None
-
-def get_body(message):
-    types = ['text/html', 'text/plain']
-    for t in types:
-        body = get_content(message, type=t)
-        if body is not None:
-            break
-    return body
-
-def read_email(message, emails):
-    emails[message['Message-ID']] = message
-
-def populate_responses(message, responses):
-    irt = message.get('In-Reply-To')
-    if irt is None:
-        return
-    if irt not in responses:
-        responses[irt] = []
-    if message['Message-ID'] not in responses[irt]:
-        responses[irt].append(message['Message-ID'])
-
-def html_helper(message, key=None, escape=True, emails=True):
-    if key is not None:
-        message = message.get(key)
-        if escape:
-            message = html.escape(message)
-        if emails:
-            message = filter_emails(message)
-        return '<p><b>%s</b>: %s</p>\n' % (key, message)
+# Helps extracting tricky header info (so far only needed for subjects)
+def get_header_text( msg, item ):
+    i = msg.get( item )
+    if ( isinstance( i, str ) ):
+        return i
+    elif ( isinstance( i, email.header.Header ) ):
+        sub = email.header.decode_header( i )[0][0] # TODO: What about others?
+        return sub.decode( chardet.detect( sub )['encoding'] )
     else:
-        if escape:
-            message = html.escape(message)
-        if emails:
-            message = filter_emails(message)
-        return '<p>%s</p>\n' % (message)
+        print( 'TODO' )
 
-def link(url, text):
-    return '<a href="%s">%s</a>' % (html.escape(url), text)
+def get_payload_text( msg ):
+    subtype = msg.get_content_subtype()
+    payload = msg.get_payload( decode=True )
+    charset = msg.get_charset() or chardet.detect( payload )['encoding']
+    content = payload.decode( charset )
+    if ( subtype == 'plain' ):
+        return content.replace( '\n', '<br>' )
+    else:
+        return content
 
-def tree(e):
-    mid = e['Message-ID']
-    date = date_parser.parse(e['Date']).strftime('%B %d, %Y')
-    s = '<li>%s: %s</li>' % (date, link(mid + '.html', e['Subject']))
-    if mid in responses:
-        s += '<ul>\n'
-        for r in responses[mid]:
-            s += tree(emails[r])
-        s += '</ul>\n'
-    return s
+def payload_get_type( payload, types, type_list ):
+    for t in type_list:
+        if ( t in types ):
+            return get_payload_text( payload[types.index( t )] )
+    # TODO: Is this possible? Testing indicates no
 
-def handle_ascii_quotes(text):
-    quotes = []
-    any_quotes = False
-    in_quote = None
-    for line in text.split('\r\n'):
-        if line.startswith('>'):
-            if not in_quote:
-                any_quotes = True
-                in_quote = True
-                quotes.append([])
+def parse_email( msg ):
+    content_type = msg.get_content_type()
+    maintype = msg.get_content_maintype()
+    subtype = msg.get_content_subtype()
+    payload = msg.get_payload()
+    if ( maintype == 'text' ):
+        return [{
+            'name': msg.get_filename(),
+            'content': get_payload_text( msg ),
+            'type': 'text',
+        }]
+    elif ( maintype == 'multipart' ):
+        if ( subtype == 'alternative' ):
+            # TODO: Can this contain non-text?
+            types = [m.get_content_type() for m in payload]
+            return [{
+                'name': msg.get_filename(),
+                'content': payload_get_type( payload, types, ['text/html', 'text/plain'] ),
+                'type': 'text',
+            }]
         else:
-            in_quote = False
-        if in_quote:
-            quotes[len(quotes) - 1].append(line[1:])
-        else:
-            quotes.append(line)
+            return list( flatten( [parse_email( p ) for p in payload] ) )
+    elif ( content_type == 'message/rfc822' ):
+        return list( flatten( [parse_email( p ) for p in payload] ) )
+    elif ( content_type == 'application/pgp-signature' ):
+        return [{
+            'name': None, # Include in body
+            'content': msg.get_payload().replace( '\n', '<br>' ),
+            'type': 'text',
+        }]
+    elif ( content_type != 'message/delivery-status' ):
+        return [{
+            'name': msg.get_filename(),
+            'content': msg.get_payload( decode=True ),
+            'type': content_type,
+        }]
 
-    new_text = ''
-    for l in quotes:
-        if isinstance(l, str):
-            new_text += '%s\r\n' % filter_emails(l)
+def content_to_html( msg, content, children, message_ids, outdir ):
+    if ( content is None ): return
+
+    # Writes body of html/header info
+    with open( body_path, 'w' ) as file:
+        file.write( '''
+            <html>
+                <head>
+                    <title>%s</title>
+                </head>
+                <body>
+                    <p><a href="index.html">Index</a></p>
+                    <p><strong>Subject</strong>: %s</p>
+                    <p><strong>From</strong>: %s</p>
+                    <p><strong>Date</strong>: %s</p>
+        ''' % (
+            '%s - %s - %s' % (
+                html.escape( get_header_text( msg, 'subject' ) ),
+                html.escape( format_date( msg ) ),
+                'LUG @ NC State Email Archive'
+            ),
+            html.escape( get_header_text( msg, 'subject' ) ),
+            html.escape( msg.get( 'from' ) ),
+            html.escape( format_date( msg ) ),
+        ) )
+
+        # Parent info
+        irt = msg.get( 'in-reply-to' )
+        if ( irt is not None ):
+            if ( irt in message_ids ):
+                file.write( '''
+                        <p><a href="%s">Parent</a></p>
+                ''' % ( irt + '.html' ) )
+            else:
+                file.write( '''
+                        <p><em>Parent not archived</em></p>
+                ''' )
+
+    # Writes message content
+    attachments = []
+    for part in content:
+        if ( part is None ):
+            continue
+        name = part['name']
+        # Append for multi-part messages/body
+        if ( name is None ):
+            name = msg_id + '.html'
+            filepath = body_path
+            # hr to distinguish content
+            part['content'] = '<hr>' + part['content']
+        # For attachments, just create the director if needed
         else:
-            print(l)
-            new_text += '<blockquote>%s</blockquote>' % filter_emails(
-                '\r\n'.join(l)
+            os.makedirs( attachment_path, exist_ok=True )
+            filepath = os.path.join( attachment_path, name )
+            attachments.append( { 'name': name, 'path': filepath } )
+        with open( filepath, 'a' if part['type'] == 'text' else 'ab' ) as file:
+            file.write( part['content'] )
+
+    # Finishes body/writes footer info
+    with open( body_path, 'a' ) as file:
+        if ( len( attachments ) > 0 ):
+            # Attachments portion of footer
+            file.write( '''
+                    <hr>
+                    <p><strong>Attachments</strong>:</p>
+                    <p><em>(Please be wary of attachments - they have not been scanned for viruses)</em></p>
+                    <ul>
+                        %s
+                    </ul>
+            ''' % (
+                '\n'.join(
+                    [
+                        '<li><a href="../%s">%s</a>' % ( a['path'], a['name'] )
+                        for a in attachments
+                    ]
+                )
+            ) )
+
+        # Replies
+        if ( len( children[msg_id] ) > 0 ):
+            file.write( '''
+                    <hr>
+                    <p><strong>Replies</strong>:</p>
+                    <ul>
+                        %s
+                    </ul>
+            ''' % (
+                '\n'.join(
+                    [
+                        '<li><a href="%s">%s</a>' % (
+                            child + '.html',
+                            html.escape( get_header_text( message_ids[child], 'subject' ) ),
+                        )
+                        for child in children[msg_id]
+                    ]
+                )
+            ) )
+
+        # Finishes body
+        file.write( '''
+                </body>
+            </html>
+        ''' )
+
+def write_message_tree( file, msg_ids, children, message_ids ):
+    for msg_id in msg_ids:
+        msg = message_ids[msg_id]
+        file.write( '<li>%s: %s</li>' % (
+            html.escape( format_date( msg ) ),
+            '<a href="%s">%s</a>' % (
+                msg_id + '.html',
+                get_header_text( msg, 'subject' )
             )
-    if any_quotes:
-        return handle_ascii_quotes(new_text)
-    else:
-        return new_text
-
-###############################################################################
-
-long_description = 'Generates a collection of HTML files from a given mbox ' \
-                 + 'file in the style of an online email archive'
+        ) )
+        if ( len( children[msg_id] ) > 0 ):
+            file.write( '<ul>' )
+            write_message_tree( file, children[msg_id], children, message_ids )
+            file.write( '</ul>' )
 
 if __name__ == '__main__':
-    # Parses args
-    parser = argparse.ArgumentParser(description=long_description)
-    parser.add_argument(
-        '-i', '--infile',
-        type=str,
-        help='Input mbox file'
-    )
-    parser.add_argument(
-        '-o', '--outdir',
-        type=str,
-        help='Output directory for HTML files'
-    )
-    parser.add_argument(
-        '-l', '--list',
-        type=str,
-        help='Intended for use with mailing lists; use this option to ' \
-           + 'exclude emails not explicitly sent to the given email address',
-        nargs='?',
-        default=''
-    )
-    args = parser.parse_args()
+    filename = 'export.mbox'
+    outdir = 'out'
 
-    # Associates responses with emails
-    emails = {}
-    responses = {}
-    mb = mailbox.mbox(args.infile)
+    # TODO: Check if file exists
+    messages = mailbox.mbox( filename )
 
-    # Sorts emails by date
-    mb = [x for x in mb]
-    mb.sort(key = lambda message: date_parser.parse(message['Date']))
+    # Gets parental info
+    children = {}
+    message_ids = {}
+    for key, msg in messages.items():
+        msg_id = msg.get( 'message-id' )
+        message_ids[msg_id] = msg
+        if ( msg_id not in children ):
+            children[msg_id] = []
+        parent = msg.get( 'in-reply-to' )
+        if ( parent not in children ):
+            children[parent] = []
+        children[parent].append( msg_id )
 
-    for message in mb:
-        # Filters to only emails sent to mailing list
-        if message['To'].find(args.list) < 0:
-            continue
-        read_email(message, emails)
-        populate_responses(message, responses)
+    ## Writes email html files
+    #for key, msg in messages.items():
+    #    msg_id = msg.get( 'message-id' )
+    #    body_path = os.path.join( outdir, msg_id + '.html' )
+    #    attachment_path = os.path.join( outdir, msg_id )
 
-    # Creates index.html
-    with open(os.path.join(args.outdir, 'index.html'), 'w') as f:
-        f.write('<title>%s</title>' % title)
-        f.write('<ul>\n')
-        parent_threads = [e for e in emails.values() if not e['In-Reply-To']]
-        for t in parent_threads:
-            f.write(tree(t))
-        f.write('</ul>\n')
+    #    # Deletes all previous files (if they exist) for easier append-age later
+    #    try:
+    #        os.remove( body_path )
+    #    except OSError:
+    #        pass
+    #    shutil.rmtree( attachment_path, ignore_errors=True )
 
-    # Creates HTML files
-    for mid, message in emails.items():
-        print(mid)
-        with open(os.path.join(args.outdir, mid + '.html'), 'w') as f:
-            date, subject = message.get('Date'), message.get('Subject')
-            f.write('<title>%s - %s - %s</title>' % (subject, date, title))
-            f.write(html_helper(link('index.html', 'Index'), escape=False))
-            f.write(html_helper(message, 'Subject'))
-            f.write(html_helper(message, 'From'))
-            f.write(html_helper(message, 'Date'))
+    #    content = parse_email( msg )
+    #    content_to_html( msg, content, children, message_ids, outdir )
 
-            if message['In-Reply-To'] is not None:
-                f.write(html_helper(link(message['In-Reply-To'] + '.html', 'Parent'), escape=False, emails=False))
+    # Writes index.html
+    # 1. Sort files based on timestamp
+    messages = [x for x in messages]
+    messages.sort( key = lambda m: email.utils.parsedate_tz( m.get( 'date' ) ) )
+    # 2. Find messages that either have no parent or parent html file
+    roots = [
+        f.get( 'message-id' ) for f in messages if not f.get( 'in-reply-to' ) \
+            or not os.path.exists( os.path.join(
+                outdir, f.get( 'in-reply-to' ) + '.html'
+            ) )
+    ]
+    with open( os.path.join( outdir, 'index.html' ), 'w' ) as file:
+        file.write( '''
+        <html>
+            <head>
+                <title>LUG @ NC State Email Archive</title>
+            </head>
+            <body>
+                <ul>''' )
 
-            f.write(html_helper('<hr>', escape=False))
-            # Handles ASCII replies better
-            body = get_body(message)
-            for p in handle_ascii_quotes(body).split('\r\n\r\n'):
-                f.write('<p>%s</p>' % filter_emails(p))
-            f.write(html_helper('<hr>', escape=False))
+        write_message_tree( file, roots, children, message_ids )
 
-            if mid in responses:
-                f.write(html_helper('<b>Replies:</b>', escape=False))
-                f.write('<ul>\n')
-                for r in responses[mid]:
-                    f.write('<li>%s</li>\n' % link(emails[r]['Message-ID'] + '.html', emails[r]['Subject']))
-                f.write('</ul>\n')
+        file.write( '''
+                </ul>
+            </body>
+        </html>
+        ''' )
