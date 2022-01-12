@@ -38,7 +38,7 @@ def get_payload_text( msg ):
     charset = msg.get_charset() or chardet.detect( payload )['encoding']
     content = payload.decode( charset )
     if ( subtype == 'plain' ):
-        return content.replace( '\n', '<br>' )
+        return html.escape( content ).replace( '\n', '<br>' )
     else:
         return content
 
