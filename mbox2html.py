@@ -91,18 +91,24 @@ def get_parent_id( msg ):
         # Try in-reply-to
         irt = msg.get( 'in-reply-to' )
         if ( irt is not None ): return irt
-        # TODO: Try thread-index
-        # https://docs.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxomsg/9e994fbb-b839-495f-84e3-2c8c02c7dd9b
-        #thread_index = msg.get( 'thread-index' )
-        #if ( thread_index is None ): return None
-        ## Extracts thread index data
-        #thread_index = baes64.b64decode( thread_index )
-        #filetime = struct.unpack( '>xIB', thread_index[:6] )
-        #guid = struct.unpack( '>IHHQ', thread_index[6:22] )
-        #response_levels = []
-        #for r in range( 22, len( thread_index ), 5 ):
-        #    response_levels.append( struct.unpack( '>I', thread_index[r:r + 4] )[0] )
-        # Decodes thread index data
+        # # TODO: Try thread-index
+        # # https://docs.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxomsg/9e994fbb-b839-495f-84e3-2c8c02c7dd9b
+        # thread_index = msg.get( 'thread-index' )
+        # if ( thread_index is None ): return None
+        # # Extracts thread index data
+        # thread_index = base64.b64decode( thread_index )
+        # filetime = struct.unpack( '>xIB', thread_index[:6] )
+        # # I have some confusion here, since the docs say the GUID has data 1-3,
+        # # but it's 16 bytes, so how is it divided? Searching yielded no further
+        # # confusion, as the only other "p"-guid I could find is the packet
+        # # guid, which has 4 data fields
+        # # https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/5ee5aa9d-6b96-4e54-a6bc-6b1f562d616b
+        # guid = struct.unpack( '>IHHQ', thread_index[6:22] )
+        # response_levels = []
+        # for r in range( 22, len( thread_index ), 5 ):
+        #     response_levels.append( struct.unpack( '>I', thread_index[r:r + 4] )[0] )
+        # # TODO: or just do https://www.jwz.org/doc/threading.html
+        return None
     # Assumes last references is the replied-to email
     return re.split( r'\s+', references )[-1]
 
@@ -248,7 +254,8 @@ if __name__ == '__main__':
         parent = get_parent_id( msg )
         if ( parent not in children ):
             children[parent] = []
-        children[parent].append( msg_id )
+        if msg_id not in children[parent]:
+            children[parent].append( msg_id )
 
     # Writes email html files
     for key, msg in messages.items():
@@ -267,8 +274,8 @@ if __name__ == '__main__':
         content_to_html( msg, content, children, message_ids, outdir )
 
     # Writes index.html
-    # 1. Sort files based on timestamp
-    sorted_messages = [x for x in messages]
+    # 1. Sort files based on timestamp (by message_id to eliminate dupes)
+    sorted_messages = [x for x in message_ids.values()]
     sorted_messages.sort( key = lambda m: email.utils.parsedate_tz( m.get( 'date' ) ) )
     # 2. Find messages that either have no parent or parent html file
     roots = [
