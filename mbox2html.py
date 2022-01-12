@@ -8,6 +8,7 @@ import copy
 import re
 import os
 import shutil
+import math
 
 def flatten( l ):
     for i in l:
@@ -19,7 +20,12 @@ def flatten( l ):
 # Puts date into consistent format
 def format_date( msg ):
     date = msg.get( 'date' )
-    return email.utils.format_datetime( email.utils.parsedate_to_datetime( date ) )
+    try:
+        return email.utils.format_datetime(
+            email.utils.parsedate_to_datetime( date )
+        )
+    except ValueError:
+        return date
 
 # Helps extracting tricky header info (so far only needed for subjects)
 def get_header_text( msg, item ):
@@ -35,6 +41,7 @@ def get_header_text( msg, item ):
 def get_payload_text( msg ):
     subtype = msg.get_content_subtype()
     payload = msg.get_payload( decode=True )
+    if ( payload is None ): return ''
     charset = msg.get_charset() or chardet.detect( payload )['encoding']
     content = payload.decode( charset )
     if ( subtype == 'plain' ):
@@ -85,34 +92,66 @@ def parse_email( msg ):
             'type': content_type,
         }]
 
-def get_parent_id( msg ):
-    references = msg.get( 'references' )
-    if ( references is None ):
-        # Try in-reply-to
-        irt = msg.get( 'in-reply-to' )
-        if ( irt is not None ): return irt
-        # # TODO: Try thread-index
-        # # https://docs.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxomsg/9e994fbb-b839-495f-84e3-2c8c02c7dd9b
-        # thread_index = msg.get( 'thread-index' )
-        # if ( thread_index is None ): return None
-        # # Extracts thread index data
-        # thread_index = base64.b64decode( thread_index )
-        # filetime = struct.unpack( '>xIB', thread_index[:6] )
-        # # I have some confusion here, since the docs say the GUID has data 1-3,
-        # # but it's 16 bytes, so how is it divided? Searching yielded no further
-        # # confusion, as the only other "p"-guid I could find is the packet
-        # # guid, which has 4 data fields
-        # # https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/5ee5aa9d-6b96-4e54-a6bc-6b1f562d616b
-        # guid = struct.unpack( '>IHHQ', thread_index[6:22] )
-        # response_levels = []
-        # for r in range( 22, len( thread_index ), 5 ):
-        #     response_levels.append( struct.unpack( '>I', thread_index[r:r + 4] )[0] )
-        # # TODO: or just do https://www.jwz.org/doc/threading.html
-        return None
-    # Assumes last references is the replied-to email
-    return re.split( r'\s+', references )[-1]
+def filler_message( mid ):
+    m = mailbox.Message()
+    m['message-id'] = mid
+    m['subject'] = '[Not in archive]'
+    m['date'] = '[Not in archive]'
+    m['from'] = ''
+    return m
 
-def content_to_html( msg, content, children, message_ids, outdir ):
+def safely_append_thread( mid, par, threads, messages ):
+    if ( par is None ): return
+    if ( mid not in threads ):
+        threads[mid] = []
+    if ( par not in threads ):
+        threads[par] = []
+    if ( mid not in threads[par] ):
+        threads[par].append( mid )
+    # Creates filler if missing
+    if ( par not in messages ):
+        messages[par] = filler_message( par )
+    if ( mid not in messages ):
+        messages[mid] = filler_message( mid )
+        messages[mid]['in-reply-to'] = par
+
+def get_parent_id( msg ):
+    irt = msg.get( 'in-reply-to' )
+    if ( irt is not None ): return irt
+    refs = msg.get( 'references' )
+    if ( refs is not None ): return refs[-1]
+    return None
+
+# Establishes hierarchical thread relations
+# (Also modifies in in-reply-to field if needed for later use)
+# TODO: Implement https://www.jwz.org/doc/threading.html
+# Current implementation assumes Message-IDs are consistent between parent and
+# child (which is not always the case), and requires manual intervention in
+# this case, and in the case where fields aren't filled out consistently
+def get_threads( messages ):
+    threads = {} # Contains direct children
+    for mid, msg in messages.copy().items():
+        if ( mid not in threads ):
+            threads[mid] = []
+        # Adds IRT content (if available)
+        irt = msg.get( 'in-reply-to' )
+        safely_append_thread( mid, irt, threads, messages )
+        # Adds references content (if available)
+        # References are (typically) hierarchical: 1st is parent of 2nd, 2nd of 3rd, etc.
+        # TODO: Not guaranteed to be separated by spaces
+        refs = re.split( r'\s+', ( msg.get( 'references' ) or '' ).strip() ) or []
+        for parent, child in zip( refs, refs[1:] ):
+            safely_append_thread( child, parent, threads, messages )
+
+    # Pruning pass - ensure each thread only has 1 parent
+    for mid, children in threads.items():
+        for c in children.copy():
+            if ( get_parent_id( messages[c] ) != mid ):
+                children.remove( c )
+
+    return threads
+
+def content_to_html( msg, content, threads, messages, outdir, body_path ):
     if ( content is None ): return
 
     # Writes body of html/header info
@@ -141,7 +180,7 @@ def content_to_html( msg, content, children, message_ids, outdir ):
         # Parent info
         parent = get_parent_id( msg )
         if ( parent is not None ):
-            if ( parent in message_ids ):
+            if ( parent in messages ):
                 file.write( '''
                         <p><a href="%s">Parent</a></p>
                 ''' % ( parent + '.html' ) )
@@ -191,7 +230,7 @@ def content_to_html( msg, content, children, message_ids, outdir ):
             ) )
 
         # Replies
-        if ( len( children[msg_id] ) > 0 ):
+        if ( len( threads[msg_id] ) > 0 ):
             file.write( '''
                     <hr>
                     <p><strong>Replies</strong>:</p>
@@ -203,9 +242,9 @@ def content_to_html( msg, content, children, message_ids, outdir ):
                     [
                         '<li><a href="%s">%s</a>' % (
                             child + '.html',
-                            html.escape( get_header_text( message_ids[child], 'subject' ) ),
+                            html.escape( get_header_text( messages[child], 'subject' ) ),
                         )
-                        for child in children[msg_id]
+                        for child in threads[msg_id]
                     ]
                 )
             ) )
@@ -216,20 +255,27 @@ def content_to_html( msg, content, children, message_ids, outdir ):
             </html>
         ''' )
 
-def write_message_tree( file, msg_ids, children, message_ids ):
-    for msg_id in msg_ids:
-        msg = message_ids[msg_id]
+def write_message_tree( file, msg_ids, threads, messages ):
+    for mid in msg_ids:
+        msg = messages[mid]
         file.write( '<li>%s: %s</li>' % (
             html.escape( format_date( msg ) ),
             '<a href="%s">%s</a>' % (
-                msg_id + '.html',
+                mid + '.html',
                 get_header_text( msg, 'subject' )
             )
         ) )
-        if ( len( children[msg_id] ) > 0 ):
+        if ( len( threads[mid] ) > 0 ):
             file.write( '<ul>' )
-            write_message_tree( file, children[msg_id], children, message_ids )
+            write_message_tree( file, threads[mid], threads, messages )
             file.write( '</ul>' )
+
+def sort_helper( msg, messages ):
+    if ( isinstance( msg, str ) ):
+        return sort_helper( messages[msg], messages )
+    # 10 = number of elements in date tuple
+    # TODO: Potentially infer time?
+    return email.utils.parsedate_tz( msg.get( 'date' ) ) or 10 * (math.inf,)
 
 if __name__ == '__main__':
     filename = 'export.mbox'
@@ -239,23 +285,18 @@ if __name__ == '__main__':
     mbox = mailbox.mbox( filename )
     messages = {}
     for key, msg in mbox.items():
-        to = msg.get( 'to' ) or msg.get( 'delivered-to' )
-        if ( to.find( 'lug@lists.ncsu.edu' ) >= 0 ):
-            messages[key] = msg
+        to = msg.get( 'to' ) or msg.get( 'delivered-to' ) or ''
+        cc = msg.get( 'cc' ) or ''
+        if ( ( to.find( 'lug@lists.ncsu.edu' ) >= 0 )
+          or ( cc.find( 'lug@lists.ncsu.edu' ) >= 0 ) ):
+            messages[msg.get( 'message-id' )] = msg
 
     # Gets parental info
-    children = {}
-    message_ids = {}
-    for key, msg in messages.items():
-        msg_id = msg.get( 'message-id' )
-        message_ids[msg_id] = msg
-        if ( msg_id not in children ):
-            children[msg_id] = []
-        parent = get_parent_id( msg )
-        if ( parent not in children ):
-            children[parent] = []
-        if msg_id not in children[parent]:
-            children[parent].append( msg_id )
+    threads = get_threads( messages )
+
+    # Sorts replies to be in order
+    for mid, msgs in threads.copy().items():
+        threads[mid].sort( key = lambda x: sort_helper( x, messages ) )
 
     # Writes email html files
     for key, msg in messages.items():
@@ -271,19 +312,18 @@ if __name__ == '__main__':
         shutil.rmtree( attachment_path, ignore_errors=True )
 
         content = parse_email( msg )
-        content_to_html( msg, content, children, message_ids, outdir )
+        content_to_html( msg, content, threads, messages, outdir, body_path )
 
     # Writes index.html
-    # 1. Sort files based on timestamp (by message_id to eliminate dupes)
-    sorted_messages = [x for x in message_ids.values()]
-    sorted_messages.sort( key = lambda m: email.utils.parsedate_tz( m.get( 'date' ) ) )
-    # 2. Find messages that either have no parent or parent html file
+    # Sorts files based on timestamp; makes things easier
+    sorted_messages = [x for x in messages.values()]
+    sorted_messages.sort( key = lambda x: sort_helper( x, messages ) )
+
     roots = [
-        f.get( 'message-id' ) for f in sorted_messages if not get_parent_id( f ) \
-            or not os.path.exists( os.path.join(
-                outdir, get_parent_id( f ) + '.html'
-            ) )
+        f.get( 'message-id' ) for f in sorted_messages
+            if get_parent_id( f ) is None
     ]
+
     with open( os.path.join( outdir, 'index.html' ), 'w' ) as file:
         file.write( '''
         <html>
@@ -293,7 +333,7 @@ if __name__ == '__main__':
             <body>
                 <ul>''' )
 
-        write_message_tree( file, roots, children, message_ids )
+        write_message_tree( file, roots, threads, messages )
 
         file.write( '''
                 </ul>
