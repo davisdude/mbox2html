@@ -230,7 +230,12 @@ if __name__ == '__main__':
     outdir = 'out'
 
     # TODO: Check if file exists
-    messages = mailbox.mbox( filename )
+    mbox = mailbox.mbox( filename )
+    messages = {}
+    for key, msg in mbox.items():
+        to = msg.get( 'to' ) or msg.get( 'delivered-to' )
+        if ( to.find( 'lug@lists.ncsu.edu' ) >= 0 ):
+            messages[key] = msg
 
     # Gets parental info
     children = {}
