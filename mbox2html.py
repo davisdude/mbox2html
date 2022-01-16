@@ -113,6 +113,7 @@ def safely_append_thread( mid, par, threads, messages ):
         messages[par] = filler_message( par )
     if ( mid not in messages ):
         messages[mid] = filler_message( mid )
+    if ( messages[mid].get( 'in-reply-to' ) is None ):
         messages[mid]['in-reply-to'] = par
 
 def get_parent_id( msg ):
@@ -139,7 +140,8 @@ def get_threads( messages ):
         # Adds references content (if available)
         # References are (typically) hierarchical: 1st is parent of 2nd, 2nd of 3rd, etc.
         # TODO: Not guaranteed to be separated by spaces
-        refs = re.split( r'\s+', ( msg.get( 'references' ) or '' ).strip() ) or []
+        refs = re.findall( r'\S+', msg.get( 'references' ) or '' )
+        if ( ( irt is not None ) and ( irt not in refs ) ): refs.append( irt )
         for parent, child in zip( refs, refs[1:] ):
             safely_append_thread( child, parent, threads, messages )
 
@@ -148,6 +150,8 @@ def get_threads( messages ):
         for c in children.copy():
             if ( get_parent_id( messages[c] ) != mid ):
                 children.remove( c )
+
+    # TODO: Find dead roots; attempt to connect to other threads
 
     return threads
 
@@ -287,8 +291,10 @@ if __name__ == '__main__':
     for key, msg in mbox.items():
         to = msg.get( 'to' ) or msg.get( 'delivered-to' ) or ''
         cc = msg.get( 'cc' ) or ''
+        rto = msg.get( 'reply-to' ) or ''
         if ( ( to.find( 'lug@lists.ncsu.edu' ) >= 0 )
-          or ( cc.find( 'lug@lists.ncsu.edu' ) >= 0 ) ):
+          or ( cc.find( 'lug@lists.ncsu.edu' ) >= 0 )
+          or ( rto.find( 'lug@lists.ncsu.edu' ) >= 0 ) ):
             messages[msg.get( 'message-id' )] = msg
 
     # Gets parental info
