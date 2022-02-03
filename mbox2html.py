@@ -211,8 +211,15 @@ def content_to_html( msg, content, threads, messages, outdir, body_path ):
             os.makedirs( attachment_path, exist_ok=True )
             filepath = os.path.join( attachment_path, name )
             attachments.append( { 'name': name, 'path': filepath } )
-        with open( filepath, 'a' if part['type'] == 'text' else 'ab' ) as file:
-            file.write( part['content'] )
+
+        if part['type'] == 'text':
+            # TODO: Attempt to detect encoding?
+            try:
+                open( filepath, 'a' ).write( part['content'] )
+            except UnicodeEncodeError:
+                open( filepath, 'a', encoding='utf8' ).write( part['content'] )
+        else:
+            open( filepath, 'ab' ).write( part['content'] )
 
     # Finishes body/writes footer info
     with open( body_path, 'a' ) as file:
