@@ -1,6 +1,7 @@
 import mailbox
 import email, email.policy, email.utils
 import html
+import urllib.parse
 import chardet
 import base64
 import struct
@@ -187,7 +188,7 @@ def content_to_html( msg, content, threads, messages, outdir, body_path ):
             if ( parent in messages ):
                 file.write( '''
                         <p><a href="%s">Parent</a></p>
-                ''' % ( parent + '.html' ) )
+                ''' % ( urllib.parse.quote( parent ) + '.html' ) )
             else:
                 file.write( '''
                         <p><em>Parent not archived</em></p>
@@ -227,7 +228,7 @@ def content_to_html( msg, content, threads, messages, outdir, body_path ):
             ''' % (
                 '\n'.join(
                     [
-                        '<li><a href="../%s">%s</a>' % ( a['path'], a['name'] )
+                        '<li><a href="../%s">%s</a>' % ( urllib.parse.quote( a['path'] ), a['name'] )
                         for a in attachments
                     ]
                 )
@@ -245,7 +246,7 @@ def content_to_html( msg, content, threads, messages, outdir, body_path ):
                 '\n'.join(
                     [
                         '<li><a href="%s">%s</a>' % (
-                            child + '.html',
+                            urllib.parse.quote( child + '.html' ),
                             html.escape( get_header_text( messages[child], 'subject' ) ),
                         )
                         for child in threads[msg_id]
@@ -265,7 +266,7 @@ def write_message_tree( file, msg_ids, threads, messages ):
         file.write( '<li>%s: %s</li>' % (
             html.escape( format_date( msg ) ),
             '<a href="%s">%s</a>' % (
-                mid + '.html',
+                urllib.parse.quote( mid + '.html' ),
                 get_header_text( msg, 'subject' )
             )
         ) )
@@ -283,7 +284,7 @@ def sort_helper( msg, messages ):
 
 if __name__ == '__main__':
     filename = 'export.mbox'
-    outdir = 'out'
+    outdir = 'email-archive'
 
     # TODO: Check if file exists
     mbox = mailbox.mbox( filename )
