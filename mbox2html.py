@@ -10,6 +10,7 @@ import re
 import os
 import shutil
 import math
+import argparse
 
 def flatten( l ):
     for i in l:
@@ -175,7 +176,7 @@ def content_to_html( msg, content, threads, messages, outdir, body_path ):
             '%s - %s - %s' % (
                 html.escape( get_header_text( msg, 'subject' ) ),
                 html.escape( format_date( msg ) ),
-                'LUG @ NC State Email Archive'
+                'Email Archive'
             ),
             html.escape( get_header_text( msg, 'subject' ) ),
             html.escape( msg.get( 'from' ) ),
@@ -290,20 +291,41 @@ def sort_helper( msg, messages ):
     return email.utils.parsedate_tz( msg.get( 'date' ) ) or 10 * (math.inf,)
 
 if __name__ == '__main__':
-    filename = 'export.mbox'
-    outdir = 'email-archive'
+    parser = argparse.ArgumentParser()
+    parser.add_argument('mboxfile', default='export.mbox', help='path to mbox file')
+    parser.add_argument('outdir', default='email-archive', help='output directory')
+    parser.add_argument('-f', '--recipient-filter', help='filter by to/cc:/rto: recipient (e.g. by mailinglist)')
+    parser.add_argument('-m', '--mode', choices=['plain','html'], default='html', help='multipart mime-type to extract, default: text/html')
+    args = parser.parse_args()
 
-    # TODO: Check if file exists
+    filename = args.mboxfile
+    outdir = args.outdir
+    recipient_filter = args.recipient_filter
+    mode = args.mode
+
+    if not os.path.isfile(filename):
+        print(f'path "{filename}" is not a file')
+        exit(1)
+
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+
     mbox = mailbox.mbox( filename )
     messages = {}
     for key, msg in mbox.items():
         to = msg.get( 'to' ) or msg.get( 'delivered-to' ) or ''
         cc = msg.get( 'cc' ) or ''
         rto = msg.get( 'reply-to' ) or ''
-        if ( ( to.find( 'lug@lists.ncsu.edu' ) >= 0 )
-          or ( cc.find( 'lug@lists.ncsu.edu' ) >= 0 )
-          or ( rto.find( 'lug@lists.ncsu.edu' ) >= 0 ) ):
+        if ( recipient_filter ):
+            if ( ( to.find( recipient_filter ) >= 0 )
+              or ( cc.find( recipient_filter ) >= 0 )
+              or ( rto.find( recipient_filter ) >= 0 ) ):
+                messages[msg.get( 'message-id' )] = msg
+        elif msg.get('message-id'):
             messages[msg.get( 'message-id' )] = msg
+        else:
+            print(f'"{key}" has no message-id')
+            continue
 
     # Gets parental info
     threads = get_threads( messages )
@@ -342,7 +364,7 @@ if __name__ == '__main__':
         file.write( '''
         <html>
             <head>
-                <title>LUG @ NC State Email Archive</title>
+                <title>Email Archive</title>
             </head>
             <body>
                 <ul>''' )
