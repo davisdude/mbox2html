@@ -20,14 +20,17 @@ def flatten( l ):
             yield i
 
 # Puts date into consistent format
-def format_date( msg ):
-    date = msg.get( 'date' )
+def format_date( msg, listing=False):
+    msg_date = msg.get( 'date' )
     try:
-        return email.utils.format_datetime(
-            email.utils.parsedate_to_datetime( date )
-        )
+        date = email.utils.parsedate_to_datetime( msg_date )
+        if listing:
+            date_format = "%Y %d. %B %A"
+            return date.strftime(date_format)
+        else:
+            return email.utils.format_datetime(date)
     except ValueError:
-        return date
+        return msg_date
 
 # Helps extracting tricky header info (at times needed for Subject and From)
 def get_header_text(msg, item, default='utf-8'):
@@ -285,7 +288,7 @@ def write_message_tree( file, msg_ids, threads, messages ):
     for mid in msg_ids:
         msg = messages[mid]
         file.write( '<li>%s: %s</li>' % (
-            html.escape( format_date( msg ) ),
+            html.escape( format_date( msg, listing=True ) ),
             '<a href="%s">%s</a>' % (
                 urllib.parse.quote( mid.replace('/','-') + '.html' ),
                 get_header_text( msg, 'subject' )
