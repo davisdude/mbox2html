@@ -81,9 +81,13 @@ def parse_email( msg ):
         if ( subtype == 'alternative' ):
             # TODO: Can this contain non-text?
             types = [m.get_content_type() for m in payload]
+            if args.mode == 'plain':
+                type_list = ['text/plain']
+            else:
+                type_list = ['text/html', 'text/plain']
             return [{
                 'name': msg.get_filename(),
-                'content': payload_get_type( payload, types, ['text/html', 'text/plain'] ),
+                'content': payload_get_type( payload, types, type_list ),
                 'type': 'text',
             }]
         else:
