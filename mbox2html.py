@@ -283,7 +283,7 @@ def write_message_tree( file, msg_ids, threads, messages ):
         file.write( '<li>%s: %s</li>' % (
             html.escape( format_date( msg ) ),
             '<a href="%s">%s</a>' % (
-                urllib.parse.quote( mid + '.html' ),
+                urllib.parse.quote( mid.replace('/','-') + '.html' ),
                 get_header_text( msg, 'subject' )
             )
         ) )
@@ -346,8 +346,8 @@ if __name__ == '__main__':
     # Writes email html files
     for key, msg in messages.items():
         msg_id = msg.get( 'message-id' )
-        body_path = os.path.join( outdir, msg_id + '.html' )
-        attachment_path = os.path.join( outdir, msg_id )
+        body_path = os.path.join( outdir, msg_id.replace('/','-') + '.html' )
+        attachment_path = os.path.join( outdir, msg_id.replace('/','-') )
 
         # Deletes all previous files (if they exist) for easier append-age later
         try:
