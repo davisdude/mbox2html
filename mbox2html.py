@@ -29,16 +29,25 @@ def format_date( msg ):
     except ValueError:
         return date
 
-# Helps extracting tricky header info (so far only needed for subjects)
-def get_header_text( msg, item ):
-    i = msg.get( item )
-    if ( isinstance( i, str ) ):
-        return i
-    elif ( isinstance( i, email.header.Header ) ):
-        sub = email.header.decode_header( i )[0][0] # TODO: What about others?
-        return sub.decode( chardet.detect( sub )['encoding'] )
-    else:
-        print( 'TODO' )
+# Helps extracting tricky header info (at times needed for Subject and From)
+def get_header_text(msg, item, default='utf-8'):
+    header_text = msg.get ( item )
+    headers = email.header.decode_header(header_text)
+
+    header_sections = []
+    for text, charset in headers:
+        if charset is None:
+            try:
+                encoding = chardet.detect(text)['encoding']
+                header_section = text.decode(encoding)
+            except:
+                header_section = text
+        else:
+            header_section = text.decode(charset or default)
+        if header_section:
+            header_sections.append(header_section)
+    return ' '.join(header_sections)
+
 
 def get_payload_text( msg ):
     subtype = msg.get_content_subtype()
@@ -179,7 +188,7 @@ def content_to_html( msg, content, threads, messages, outdir, body_path ):
                 'Email Archive'
             ),
             html.escape( get_header_text( msg, 'subject' ) ),
-            html.escape( msg.get( 'from' ) ),
+            html.escape( get_header_text( msg, 'from' ) ),
             html.escape( format_date( msg ) ),
         ) )
 
