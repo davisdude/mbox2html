@@ -60,7 +60,7 @@ def get_payload_text( msg ):
     payload = msg.get_payload( decode=True )
     if ( payload is None ): return ''
     charset = msg.get_charset() or chardet.detect( payload )['encoding']
-    content = payload.decode( charset )
+    content = payload.decode( charset or 'utf-8' )
     if ( subtype == 'plain' ):
         return html.escape( content ).replace( '\n', '<br>' )
     else:
