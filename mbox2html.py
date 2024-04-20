@@ -47,7 +47,7 @@ def get_header_text(msg, item, default='utf-8'):
                 header_section = text
         else:
             try:
-                header_section = text.decode(charset or default)
+                header_section = text.decode(charset)
             except:
                 header_section = text.decode(default)
         if header_section:
