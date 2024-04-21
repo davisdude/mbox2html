@@ -10,6 +10,7 @@ import re
 import os
 import shutil
 import math
+import argparse
 
 def flatten( l ):
     for i in l:
@@ -19,32 +20,47 @@ def flatten( l ):
             yield i
 
 # Puts date into consistent format
-def format_date( msg ):
-    date = msg.get( 'date' )
+def format_date( msg, listing=False):
+    msg_date = msg.get( 'date' )
     try:
-        return email.utils.format_datetime(
-            email.utils.parsedate_to_datetime( date )
-        )
+        date = email.utils.parsedate_to_datetime( msg_date )
+        if listing:
+            date_format = "%Y %d. %B %A"
+            return date.strftime(date_format)
+        else:
+            return email.utils.format_datetime(date)
     except ValueError:
-        return date
+        return msg_date
 
-# Helps extracting tricky header info (so far only needed for subjects)
-def get_header_text( msg, item ):
-    i = msg.get( item )
-    if ( isinstance( i, str ) ):
-        return i
-    elif ( isinstance( i, email.header.Header ) ):
-        sub = email.header.decode_header( i )[0][0] # TODO: What about others?
-        return sub.decode( chardet.detect( sub )['encoding'] )
-    else:
-        print( 'TODO' )
+# Helps extracting tricky header info (at times needed for Subject and From)
+def get_header_text(msg, item, default='utf-8'):
+    header_text = msg.get ( item )
+    headers = email.header.decode_header(header_text)
+
+    header_sections = []
+    for text, charset in headers:
+        if charset is None:
+            try:
+                encoding = chardet.detect(text)['encoding']
+                header_section = text.decode(encoding)
+            except:
+                header_section = text
+        else:
+            try:
+                header_section = text.decode(charset)
+            except:
+                header_section = text.decode(default)
+        if header_section:
+            header_sections.append(header_section)
+    return ' '.join(header_sections)
+
 
 def get_payload_text( msg ):
     subtype = msg.get_content_subtype()
     payload = msg.get_payload( decode=True )
     if ( payload is None ): return ''
     charset = msg.get_charset() or chardet.detect( payload )['encoding']
-    content = payload.decode( charset )
+    content = payload.decode( charset or 'utf-8' )
     if ( subtype == 'plain' ):
         return html.escape( content ).replace( '\n', '<br>' )
     else:
@@ -71,9 +87,13 @@ def parse_email( msg ):
         if ( subtype == 'alternative' ):
             # TODO: Can this contain non-text?
             types = [m.get_content_type() for m in payload]
+            if args.mode == 'plain':
+                type_list = ['text/plain']
+            else:
+                type_list = ['text/html', 'text/plain']
             return [{
                 'name': msg.get_filename(),
-                'content': payload_get_type( payload, types, ['text/html', 'text/plain'] ),
+                'content': payload_get_type( payload, types, type_list ),
                 'type': 'text',
             }]
         else:
@@ -175,10 +195,10 @@ def content_to_html( msg, content, threads, messages, outdir, body_path ):
             '%s - %s - %s' % (
                 html.escape( get_header_text( msg, 'subject' ) ),
                 html.escape( format_date( msg ) ),
-                'LUG @ NC State Email Archive'
+                'Email Archive'
             ),
             html.escape( get_header_text( msg, 'subject' ) ),
-            html.escape( msg.get( 'from' ) ),
+            html.escape( get_header_text( msg, 'from' ) ),
             html.escape( format_date( msg ) ),
         ) )
 
@@ -271,9 +291,9 @@ def write_message_tree( file, msg_ids, threads, messages ):
     for mid in msg_ids:
         msg = messages[mid]
         file.write( '<li>%s: %s</li>' % (
-            html.escape( format_date( msg ) ),
+            html.escape( format_date( msg, listing=True ) ),
             '<a href="%s">%s</a>' % (
-                urllib.parse.quote( mid + '.html' ),
+                urllib.parse.quote( mid.replace('/','-') + '.html' ),
                 get_header_text( msg, 'subject' )
             )
         ) )
@@ -290,20 +310,41 @@ def sort_helper( msg, messages ):
     return email.utils.parsedate_tz( msg.get( 'date' ) ) or 10 * (math.inf,)
 
 if __name__ == '__main__':
-    filename = 'export.mbox'
-    outdir = 'email-archive'
+    parser = argparse.ArgumentParser()
+    parser.add_argument('mboxfile', default='export.mbox', help='path to mbox file')
+    parser.add_argument('outdir', default='email-archive', help='output directory')
+    parser.add_argument('-f', '--recipient-filter', help='filter by to/cc:/rto: recipient (e.g. by mailinglist)')
+    parser.add_argument('-m', '--mode', choices=['plain','html'], default='html', help='multipart mime-type to extract, default: text/html')
+    args = parser.parse_args()
 
-    # TODO: Check if file exists
+    filename = args.mboxfile
+    outdir = args.outdir
+    recipient_filter = args.recipient_filter
+    mode = args.mode
+
+    if not os.path.isfile(filename):
+        print(f'path "{filename}" is not a file')
+        exit(1)
+
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+
     mbox = mailbox.mbox( filename )
     messages = {}
     for key, msg in mbox.items():
         to = msg.get( 'to' ) or msg.get( 'delivered-to' ) or ''
         cc = msg.get( 'cc' ) or ''
         rto = msg.get( 'reply-to' ) or ''
-        if ( ( to.find( 'lug@lists.ncsu.edu' ) >= 0 )
-          or ( cc.find( 'lug@lists.ncsu.edu' ) >= 0 )
-          or ( rto.find( 'lug@lists.ncsu.edu' ) >= 0 ) ):
+        if ( recipient_filter ):
+            if ( ( to.find( recipient_filter ) >= 0 )
+              or ( cc.find( recipient_filter ) >= 0 )
+              or ( rto.find( recipient_filter ) >= 0 ) ):
+                messages[msg.get( 'message-id' )] = msg
+        elif msg.get('message-id'):
             messages[msg.get( 'message-id' )] = msg
+        else:
+            print(f'"{key}" has no message-id')
+            continue
 
     # Gets parental info
     threads = get_threads( messages )
@@ -315,8 +356,8 @@ if __name__ == '__main__':
     # Writes email html files
     for key, msg in messages.items():
         msg_id = msg.get( 'message-id' )
-        body_path = os.path.join( outdir, msg_id + '.html' )
-        attachment_path = os.path.join( outdir, msg_id )
+        body_path = os.path.join( outdir, msg_id.replace('/','-') + '.html' )
+        attachment_path = os.path.join( outdir, msg_id.replace('/','-') )
 
         # Deletes all previous files (if they exist) for easier append-age later
         try:
@@ -342,7 +383,7 @@ if __name__ == '__main__':
         file.write( '''
         <html>
             <head>
-                <title>LUG @ NC State Email Archive</title>
+                <title>Email Archive</title>
             </head>
             <body>
                 <ul>''' )
