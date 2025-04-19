@@ -255,6 +255,8 @@ def content_to_html(msg, content, threads, messages, outdir, body_path):
         name = part["name"]
         # Append for multi-part messages/body
         part["content"] = part.get("content", "")
+        if isinstance(part["content"], bytes):
+            part["content"] = part["content"].decode()
         if name is None:
             name = msg_id + ".html"
             filepath = body_path
