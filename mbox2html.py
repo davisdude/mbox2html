@@ -255,13 +255,9 @@ def content_to_html(msg, content, threads, messages, outdir, body_path):
         name = part["name"]
         # Append for multi-part messages/body
         part["content"] = part.get("content", "")
-        if isinstance(part["content"], bytes):
-            part["content"] = part["content"].decode()
         if name is None:
             name = msg_id + ".html"
             filepath = body_path
-            # hr to distinguish content
-            part["content"] = "<hr>" + part["content"]
         # For attachments, just create the directory if needed
         else:
             os.makedirs(attachment_path, exist_ok=True)
@@ -269,6 +265,9 @@ def content_to_html(msg, content, threads, messages, outdir, body_path):
             attachments.append({"name": name, "path": filepath})
 
         if part["type"] == "text":
+            # hr to distinguish content
+            part["content"] = "<hr>" + part["content"]
+
             # TODO: Attempt to detect encoding?
             try:
                 open(filepath, "a").write(part["content"])
