@@ -37,7 +37,7 @@ def format_date(msg, listing=False):
 
 # Helps extracting tricky header info (at times needed for Subject and From)
 def get_header_text(msg, item, default="utf-8"):
-    header_text = msg.get(item)
+    header_text = msg.get(item, "[None]")
     headers = email.header.decode_header(header_text)
 
     header_sections = []
@@ -254,18 +254,20 @@ def content_to_html(msg, content, threads, messages, outdir, body_path):
             continue
         name = part["name"]
         # Append for multi-part messages/body
+        part["content"] = part.get("content", "")
         if name is None:
             name = msg_id + ".html"
             filepath = body_path
-            # hr to distinguish content
-            part["content"] = "<hr>" + part["content"]
-        # For attachments, just create the director if needed
+        # For attachments, just create the directory if needed
         else:
             os.makedirs(attachment_path, exist_ok=True)
             filepath = os.path.join(attachment_path, name)
             attachments.append({"name": name, "path": filepath})
 
         if part["type"] == "text":
+            # hr to distinguish content
+            part["content"] = "<hr>" + part["content"]
+
             # TODO: Attempt to detect encoding?
             try:
                 open(filepath, "a").write(part["content"])
