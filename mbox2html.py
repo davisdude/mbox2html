@@ -262,7 +262,7 @@ def content_to_html(msg, content, threads, messages, outdir, body_path):
             filepath = body_path
             # hr to distinguish content
             part["content"] = "<hr>" + part["content"]
-        # For attachments, just create the director if needed
+        # For attachments, just create the directory if needed
         else:
             os.makedirs(attachment_path, exist_ok=True)
             filepath = os.path.join(attachment_path, name)
